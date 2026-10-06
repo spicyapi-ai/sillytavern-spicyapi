@@ -1,0 +1,11 @@
+{
+    "name": "sillytavern-spicyapi",
+    "version": "0.1.0",
+    "private": true,
+    "description": "SillyTavern extension: pictures and videos from SpicyAPI models, priced before every run.",
+    "type": "module",
+    "license": "MIT",
+    "scripts": {
+        "test": "node --test test/*.test.js"
+    }
+}

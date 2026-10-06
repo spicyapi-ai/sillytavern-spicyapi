@@ -1,0 +1,91 @@
+.spicyapi-settings .spicyapi-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.spicyapi-settings .spicyapi-row {
+    gap: 8px;
+    margin: 4px 0;
+}
+
+.spicyapi-settings .spicyapi-note {
+    display: block;
+    opacity: 0.8;
+    line-height: 1.35;
+}
+
+.spicyapi-settings .spicyapi-balance {
+    opacity: 0.9;
+}
+
+.spicyapi-settings .menu_button {
+    white-space: nowrap;
+}
+
+.spicyapi-settings .spicyapi-price-tag {
+    opacity: 0.7;
+    font-weight: 600;
+}
+
+.spicyapi-settings .spicyapi-advanced summary,
+.spicyapi-settings .spicyapi-prices summary {
+    cursor: pointer;
+    opacity: 0.85;
+}
+
+.spicyapi-settings .spicyapi-details {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 2px 0 8px 12px;
+    padding-left: 8px;
+    border-left: 1px solid var(--SmartThemeBorderColor);
+}
+
+.spicyapi-settings .spicyapi-details:empty {
+    display: none;
+}
+
+.spicyapi-settings .spicyapi-prices ul {
+    margin: 4px 0;
+    padding-left: 18px;
+}
+
+.spicyapi-settings .spicyapi-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.spicyapi-settings .spicyapi-option label {
+    flex: 1;
+}
+
+.spicyapi-settings .spicyapi-option .text_pole {
+    flex: 1;
+    margin: 0;
+}
+
+.spicyapi-compose h3,
+.spicyapi-confirm h3 {
+    margin: 0 0 4px;
+}
+
+.spicyapi-compose .spicyapi-compose-price {
+    margin: 2px 0 6px;
+    font-weight: 600;
+}
+
+.popup .spicyapi-writing {
+    opacity: 0.7;
+}
+
+/* The Animate button in a message's action menu only appears when the message has a picture. */
+.mes:not(:has(.mes_img_container)) .spicyapi_animate_message {
+    display: none;
+}
+
+.spicyapi-busy {
+    pointer-events: auto;
+}

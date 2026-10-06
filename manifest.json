@@ -1,0 +1,13 @@
+{
+    "display_name": "SpicyAPI",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "SpicyAPI",
+    "version": "0.1.0",
+    "homePage": "https://github.com/spicyapi-ai/sillytavern-spicyapi",
+    "auto_update": true,
+    "minimum_client_version": "1.19.0"
+}

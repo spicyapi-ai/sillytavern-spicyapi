@@ -1,0 +1,122 @@
+<div class="spicyapi-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>SpicyAPI</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="spicyapi-section">
+                <label for="spicyapi_key">API key</label>
+                <div class="flex-container alignItemsCenter">
+                    <input id="spicyapi_key" class="text_pole flex1" type="password" autocomplete="off" spellcheck="false" placeholder="sk-spicy-..." />
+                    <div id="spicyapi_key_toggle" class="menu_button menu_button_icon fa-solid fa-eye" title="Show or hide the key"></div>
+                </div>
+                <small class="spicyapi-note">
+                    Saved in this SillyTavern's settings file on this machine, in plain text, where other extensions can read it.
+                    Use a separate key with a daily spending limit:
+                    <a href="https://spicyapi.ai/console/keys" target="_blank" rel="noopener">spicyapi.ai/console/keys</a>.
+                </small>
+                <div class="flex-container alignItemsCenter spicyapi-row">
+                    <div id="spicyapi_check" class="menu_button">Check connection</div>
+                    <span id="spicyapi_balance" class="spicyapi-balance">Balance: not checked</span>
+                </div>
+                <details class="spicyapi-advanced">
+                    <summary>Connection</summary>
+                    <label for="spicyapi_transport">Route</label>
+                    <select id="spicyapi_transport" class="text_pole">
+                        <option value="auto">Auto: direct, falling back to SillyTavern's proxy</option>
+                        <option value="direct">Direct from the browser</option>
+                        <option value="proxy">Through SillyTavern's CORS proxy</option>
+                    </select>
+                    <small class="spicyapi-note">
+                        The proxy only works when <code>enableCorsProxy: true</code> is set in SillyTavern's <code>config.yaml</code>
+                        (or SillyTavern is started with <code>--corsProxy</code>), and not together with basic authentication.
+                    </small>
+                    <label for="spicyapi_base_url">API address</label>
+                    <input id="spicyapi_base_url" class="text_pole" type="text" spellcheck="false" placeholder="https://api.spicyapi.ai" />
+                </details>
+            </div>
+
+            <hr />
+
+            <div class="spicyapi-section">
+                <div class="flex-container alignItemsCenter spicyapi-row">
+                    <b class="flex1">Models</b>
+                    <div id="spicyapi_refresh_models" class="menu_button menu_button_icon fa-solid fa-rotate" title="Reload the model list"></div>
+                </div>
+                <small id="spicyapi_models_status" class="spicyapi-note"></small>
+
+                <label for="spicyapi_model_image">Pictures</label>
+                <select id="spicyapi_model_image" class="text_pole"></select>
+                <div id="spicyapi_details_image" class="spicyapi-details"></div>
+
+                <label for="spicyapi_model_t2v">Videos from text</label>
+                <select id="spicyapi_model_t2v" class="text_pole"></select>
+                <div id="spicyapi_details_t2v" class="spicyapi-details"></div>
+
+                <label for="spicyapi_model_i2v">Videos from a picture (Animate)</label>
+                <select id="spicyapi_model_i2v" class="text_pole"></select>
+                <div id="spicyapi_details_i2v" class="spicyapi-details"></div>
+
+                <label class="checkbox_label" for="spicyapi_use_avatar">
+                    <input id="spicyapi_use_avatar" type="checkbox" />
+                    <span>Use the character avatar as a reference picture (only with picture models that accept one)</span>
+                </label>
+            </div>
+
+            <hr />
+
+            <div class="spicyapi-section">
+                <b>Spending</b>
+                <div class="flex-container spicyapi-row">
+                    <div class="flex1">
+                        <label for="spicyapi_confirm_above">Ask before spending more than (USD)</label>
+                        <input id="spicyapi_confirm_above" class="text_pole" type="number" min="0" step="0.01" placeholder="never ask" />
+                    </div>
+                    <div class="flex1">
+                        <label for="spicyapi_max_per_run">Never spend more than (USD per run)</label>
+                        <input id="spicyapi_max_per_run" class="text_pole" type="number" min="0" step="0.01" placeholder="no limit" />
+                    </div>
+                </div>
+                <small class="spicyapi-note">
+                    Every run is priced before anything is charged. Leave a box empty to turn it off; 0 in the first box asks every time.
+                    A run that is already submitted keeps running (and is billed if it succeeds) even if you close the page.
+                </small>
+                <small id="spicyapi_session_spend" class="spicyapi-note"></small>
+            </div>
+
+            <hr />
+
+            <div class="spicyapi-section">
+                <b>In the chat</b>
+                <label class="checkbox_label" for="spicyapi_review">
+                    <input id="spicyapi_review" type="checkbox" />
+                    <span>Let me read and edit the prompt before generating</span>
+                </label>
+                <label class="checkbox_label" for="spicyapi_visible">
+                    <input id="spicyapi_visible" type="checkbox" />
+                    <span>Let the AI see generated pictures and videos (off: they are hidden from the prompt)</span>
+                </label>
+                <small class="spicyapi-note">
+                    Commands: <code>/spicy-img</code>, <code>/spicy-video</code>, <code>/spicy-task</code>, <code>/spicy-balance</code>.
+                    The wand menu has SpicyAPI entries, and pictures in the chat get an Animate button (<i class="fa-solid fa-film"></i>).
+                </small>
+            </div>
+
+            <hr />
+
+            <div class="spicyapi-section">
+                <b>Chat with SpicyAPI models</b>
+                <label for="spicyapi_model_chat">Chat model</label>
+                <select id="spicyapi_model_chat" class="text_pole"></select>
+                <div class="flex-container spicyapi-row">
+                    <div id="spicyapi_connect_chat" class="menu_button">Connect chat</div>
+                </div>
+                <small class="spicyapi-note">
+                    Switches API Connections to Chat Completion &gt; Custom (OpenAI-compatible) at <code>https://api.spicyapi.ai/v1</code>,
+                    saves this key as its API key and selects the chat model.
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
