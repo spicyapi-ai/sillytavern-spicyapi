@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+The AI can show a picture when the story calls for it. Off by default.
+
+- A function tool, `spicyapi_generate_image`, that chat models with tool calling can call with a description of the scene. The panel shows whether SillyTavern's function calling is on and can turn it on.
+- A reply tag for chat APIs without tool calling: `<pic prompt="...">` (the tag name can be changed) is removed from the reply and the picture is posted right after it. A neutral instruction for the model can be added to the prompt automatically or copied.
+- Limits for automatic pictures: at most one every N replies per chat, a daily limit kept in the browser, and a choice to ask or skip above the confirmation amount. The per-run limit still applies, and automatic runs only make pictures, never videos.
+- Tests for the tag parser, the cooldown and the daily limit.
+
 ## 0.1.0 (unreleased)
 
 First version.

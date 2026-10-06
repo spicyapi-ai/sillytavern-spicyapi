@@ -77,6 +77,20 @@
     font-weight: 600;
 }
 
+.spicyapi-confirm .spicyapi-confirm-prompt {
+    margin: 6px 0;
+    padding: 6px 8px;
+    border-left: 2px solid var(--SmartThemeBorderColor);
+    text-align: left;
+    font-style: italic;
+    opacity: 0.9;
+}
+
+.spicyapi-settings #spicyapi_tag_instruction {
+    font-size: 0.9em;
+    resize: vertical;
+}
+
 .popup .spicyapi-writing {
     opacity: 0.7;
 }

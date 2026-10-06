@@ -106,6 +106,68 @@
             <hr />
 
             <div class="spicyapi-section">
+                <b>Let the AI show pictures</b>
+                <label class="checkbox_label" for="spicyapi_auto">
+                    <input id="spicyapi_auto" type="checkbox" />
+                    <span>Let the AI show a picture when the story calls for it</span>
+                </label>
+                <small class="spicyapi-note">
+                    Off by default. The AI decides when, and writes the description itself. Every picture uses the picture model above,
+                    is priced first and is checked against your spending settings; automatic runs never make videos.
+                </small>
+                <div id="spicyapi_auto_options" class="spicyapi-details">
+                    <label class="checkbox_label" for="spicyapi_auto_tool">
+                        <input id="spicyapi_auto_tool" type="checkbox" />
+                        <span>As a function tool the chat model can call</span>
+                    </label>
+                    <small id="spicyapi_tool_status" class="spicyapi-note"></small>
+                    <div class="flex-container spicyapi-row">
+                        <div id="spicyapi_enable_tools" class="menu_button" style="display: none;">Turn on function calling</div>
+                    </div>
+
+                    <label class="checkbox_label" for="spicyapi_auto_tag">
+                        <input id="spicyapi_auto_tag" type="checkbox" />
+                        <span>From a tag in the reply (for chat APIs without tool calling)</span>
+                    </label>
+                    <div class="spicyapi-option">
+                        <label for="spicyapi_tag_name">Tag name</label>
+                        <input id="spicyapi_tag_name" class="text_pole" type="text" spellcheck="false" placeholder="pic" />
+                    </div>
+                    <label class="checkbox_label" for="spicyapi_tag_inject">
+                        <input id="spicyapi_tag_inject" type="checkbox" />
+                        <span>Add this instruction to the prompt for me</span>
+                    </label>
+                    <textarea id="spicyapi_tag_instruction" class="text_pole textarea_compact" rows="5" readonly></textarea>
+                    <div class="flex-container spicyapi-row">
+                        <div id="spicyapi_tag_copy" class="menu_button">Copy the instruction</div>
+                    </div>
+                    <small class="spicyapi-note">
+                        The tag is removed from the reply and the picture is posted right after it.
+                        To use your own wording, turn off the box above and put an instruction in your system prompt or Author's Note.
+                    </small>
+
+                    <div class="spicyapi-option">
+                        <label for="spicyapi_auto_every">At most one picture every N replies (per chat)</label>
+                        <input id="spicyapi_auto_every" class="text_pole" type="number" min="1" step="1" placeholder="3" />
+                    </div>
+                    <div class="spicyapi-option">
+                        <label for="spicyapi_auto_cap">Daily limit for automatic pictures (USD)</label>
+                        <input id="spicyapi_auto_cap" class="text_pole" type="number" min="0" step="0.01" placeholder="no limit" />
+                    </div>
+                    <div class="spicyapi-option">
+                        <label for="spicyapi_auto_above">Above the confirmation amount</label>
+                        <select id="spicyapi_auto_above" class="text_pole">
+                            <option value="ask">Ask me first</option>
+                            <option value="skip">Skip the picture</option>
+                        </select>
+                    </div>
+                    <small id="spicyapi_auto_spent" class="spicyapi-note"></small>
+                </div>
+            </div>
+
+            <hr />
+
+            <div class="spicyapi-section">
                 <b>Chat with SpicyAPI models</b>
                 <label for="spicyapi_model_chat">Chat model</label>
                 <select id="spicyapi_model_chat" class="text_pole"></select>

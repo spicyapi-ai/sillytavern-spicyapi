@@ -4,6 +4,9 @@
  * Generates pictures and videos with SpicyAPI models from inside a chat: slash commands, wand
  * menu entries and an Animate button on pictures. Every run is priced first, checked against the
  * user's spending limits, and the result is saved into SillyTavern and attached to the chat.
+ *
+ * Optionally the AI can show a picture on its own, through a function tool or a tag in its reply,
+ * behind a per-chat cooldown and a daily cap. Automatic runs are always pictures, never videos.
  */
 
 import {
@@ -34,6 +37,19 @@ import {
     validOptionValue,
 } from './src/catalog.js';
 import { mediaTypeForMime, pictureForApi, saveToSillyTavern, withMime } from './src/media.js';
+import {
+    DEFAULT_EVERY,
+    DEFAULT_TAG,
+    TOOL_NAME,
+    capAllows,
+    cooldownAllows,
+    countReplies,
+    createDailySpendStore,
+    normalizeTagName,
+    parseEvery,
+    stripPictureTags,
+    tagInstruction,
+} from './src/auto.js';
 
 const MODULE = 'spicyapi';
 const LOG_PREFIX = '[SpicyAPI]';
@@ -55,7 +71,26 @@ const DEFAULT_SETTINGS = Object.freeze({
     confirmAbove: 0.1,
     maxPerRun: 1,
     chatSecretId: '',
+    // The AI shows pictures on its own (off by default).
+    autoPictures: false,
+    autoTool: true,
+    autoTag: false,
+    autoTagName: DEFAULT_TAG,
+    autoTagInject: true,
+    autoEvery: DEFAULT_EVERY,
+    autoDailyCap: 0.5,
+    autoAboveConfirm: 'ask',
 });
+
+const AUTO_SPEND_STORAGE_KEY = 'spicyapi_auto_spend';
+const INSTRUCTION_KEY = 'spicyapi_picture_tag';
+// SillyTavern's extension prompt position "in chat" and role "system" (script.js).
+const PROMPT_IN_CHAT = 1;
+const PROMPT_ROLE_SYSTEM = 0;
+const INSTRUCTION_DEPTH = 1;
+// Messages that never start an automatic picture: SillyTavern's own quiet and impersonated
+// generations, greetings, and messages posted by commands or extensions.
+const NO_AUTO_TYPES = new Set(['quiet', 'impersonate', 'first_message', 'command', 'extension']);
 
 // Neutral instructions for the chat model when it writes the prompt. The extension ships no
 // prompt presets, styles or example content of its own.
@@ -79,6 +114,18 @@ const catalog = {
 };
 
 const session = { spent: 0, runs: 0 };
+
+/** Browser storage, or null where it is blocked (some private windows). */
+function browserStorage() {
+    try {
+        return globalThis.localStorage ?? null;
+    } catch {
+        return null;
+    }
+}
+
+// What automatic pictures cost today, kept in this browser.
+const autoSpend = createDailySpendStore(browserStorage(), AUTO_SPEND_STORAGE_KEY);
 
 // -- Small helpers ----------------------------------------------------------
 
@@ -147,6 +194,27 @@ class Cancelled extends Error {
     constructor(message = 'Cancelled.') {
         super(message);
         this.name = 'Cancelled';
+    }
+}
+
+/** An automatic picture that was not made, with the reason in words the chat model can read. */
+class Skipped extends Cancelled {
+    /**
+     * @param {string} reason Completes "No picture was shown because ..."
+     * @param {{notify?: boolean}} [options] Tell the user with a toast
+     */
+    constructor(reason, { notify = false } = {}) {
+        super(`Skipped: ${reason}.`);
+        this.name = 'Skipped';
+        this.reason = reason;
+        this.notify = notify;
+    }
+}
+
+class OverLimit extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'OverLimit';
     }
 }
 
@@ -287,6 +355,9 @@ function latestPicture() {
 
 function cleanWrittenPrompt(text) {
     let prompt = String(text || '').trim();
+    // A model told to use picture tags may answer with one; keep its description.
+    const tagged = stripPictureTags(prompt, settings().autoTagName);
+    if (tagged.changed) prompt = tagged.text || tagged.prompts[0] || '';
     prompt = prompt.replace(/^```[a-z]*\s*/i, '').replace(/```$/, '').trim();
     prompt = prompt.replace(/^(image |video )?prompt\s*:\s*/i, '').trim();
     prompt = prompt.replace(/^["'“”]+|["'“”]+$/g, '').trim();
@@ -384,17 +455,29 @@ function composeHint(kind, model) {
     return 'Describe what should be seen.';
 }
 
-async function confirmSpend(model, quote) {
+function shorten(text, max) {
+    const value = String(text || '');
+    return value.length > max ? `${value.slice(0, max - 3).trimEnd()}...` : value;
+}
+
+/**
+ * Asks before a run above the confirmation amount. For an automatic picture the popup says that
+ * the AI asked for it and shows the description it wrote.
+ */
+async function confirmSpend(model, quote, { auto = false, prompt = '' } = {}) {
     const context = ctx();
+    const heading = auto ? `The AI wants to show a picture for ${describeQuote(quote)}` : `Spend ${describeQuote(quote)}?`;
+    const description = auto && prompt ? `<div class="spicyapi-confirm-prompt">${escapeHtml(shorten(prompt, 400))}</div>` : '';
     const result = await context.callGenericPopup(
         `<div class="spicyapi-confirm">
-            <h3>Spend ${escapeHtml(describeQuote(quote))}?</h3>
+            <h3>${escapeHtml(heading)}</h3>
             <div>${escapeHtml(model.displayName || model.model)}</div>
+            ${description}
             <small>This is above your confirmation amount in the SpicyAPI settings.</small>
         </div>`,
         context.POPUP_TYPE.CONFIRM,
         '',
-        { okButton: `Generate for ${formatUsd(quote.estimatedCost)}`, cancelButton: 'Cancel' },
+        { okButton: `Generate for ${formatUsd(quote.estimatedCost)}`, cancelButton: auto ? 'Skip' : 'Cancel' },
     );
     if (result !== context.POPUP_RESULT.AFFIRMATIVE) throw new Cancelled();
 }
@@ -403,13 +486,53 @@ function enforceLimit(quote) {
     const limit = parseLimit(settings().maxPerRun);
     const worst = worstCase(quote);
     if (limit !== null && worst > limit) {
-        throw new Error(`This run could cost up to ${formatUsd(String(worst))}, above your limit of ${formatUsd(String(limit))} per generation (Extensions > SpicyAPI). Nothing was charged.`);
+        throw new OverLimit(`This run could cost up to ${formatUsd(String(worst))}, above your limit of ${formatUsd(String(limit))} per generation (Extensions > SpicyAPI). Nothing was charged.`);
     }
 }
 
 function overConfirmAmount(quote) {
     const threshold = parseLimit(settings().confirmAbove);
     return threshold !== null && worstCase(quote) > threshold;
+}
+
+// What automatic pictures that are still running could cost, so two of them at once cannot
+// both squeeze under the daily cap.
+let autoReserved = 0;
+
+function holdAutoSpend(hold, amount) {
+    autoReserved = Math.max(0, autoReserved + amount - hold.amount);
+    hold.amount = amount;
+}
+
+function releaseAutoSpend(hold) {
+    autoReserved = Math.max(0, autoReserved - hold.amount);
+    hold.amount = 0;
+}
+
+/**
+ * The extra checks for an automatic picture once its exact price is known: the daily cap (the
+ * worst case is then held against it until the run ends), then the confirmation amount (ask or
+ * skip, as the user chose).
+ * @param {{amount: number}} hold This run's share of the held amount
+ */
+async function gateAutoRun(model, quote, prompt, hold) {
+    const s = settings();
+    const cap = parseLimit(s.autoDailyCap);
+    const othersHeld = Math.max(0, autoReserved - hold.amount);
+    if (!capAllows({ spent: autoSpend.spentToday() + othersHeld, cost: worstCase(quote), cap })) {
+        throw new Skipped(`it would go over today's limit for automatic pictures (${formatUsd(String(cap))})`, { notify: true });
+    }
+    holdAutoSpend(hold, worstCase(quote));
+    if (!overConfirmAmount(quote)) return;
+    if (s.autoAboveConfirm === 'skip') {
+        throw new Skipped(`its price (${describeQuote(quote)}) is above the confirmation amount`, { notify: true });
+    }
+    try {
+        await confirmSpend(model, quote, { auto: true, prompt });
+    } catch (error) {
+        if (error instanceof Cancelled) throw new Skipped('the user chose not to generate it');
+        throw error;
+    }
 }
 
 // -- Progress ----------------------------------------------------------------
@@ -453,6 +576,13 @@ function startProgress(title, onStop) {
  * @param {boolean} [job.edit] Always open the prompt editor
  * @param {boolean} [job.quiet] Save the result but do not post it to the chat
  * @param {number} [job.appendTo] Message id to attach the result to instead of posting a new message
+ * @param {boolean} [job.waitForIdle] Wait until SillyTavern is not generating before posting
+ * @param {boolean} [job.auto] An automatic picture: no editor, and the daily cap and the
+ *   ask-or-skip choice apply
+ * @param {{amount: number}} [job.autoHold] For automatic pictures: what this run holds against
+ *   the daily cap; the caller releases it
+ * @param {(usd: number) => void} [job.onCharge] Called once with what the run cost, or with the
+ *   estimate when it was submitted but its outcome is unknown
  * @returns {Promise<string>} Local path of the saved result
  */
 async function generate(job) {
@@ -514,7 +644,9 @@ async function generate(job) {
     let quote = await api.quote(model.model, input);
     enforceLimit(quote);
     const alreadyShown = shownWorst !== null && worstCase(quote) <= shownWorst;
-    if (overConfirmAmount(quote) && !alreadyShown) {
+    if (job.auto) {
+        await gateAutoRun(model, quote, prompt, job.autoHold);
+    } else if (overConfirmAmount(quote) && !alreadyShown) {
         await confirmSpend(model, quote);
     }
 
@@ -528,6 +660,12 @@ async function generate(job) {
     const started = Date.now();
     let taskId = '';
     let delivering = false;
+    let charged = false;
+    const noteCharge = amount => {
+        if (charged) return;
+        charged = true;
+        job.onCharge?.(Number(amount) || 0);
+    };
     try {
         const idempotencyKey = newIdempotencyKey();
         let accepted;
@@ -542,7 +680,9 @@ async function generate(job) {
             if (!(error instanceof SpicyApiError) || error.code !== 40901) throw error;
             const fresh = await api.quote(model.model, input);
             enforceLimit(fresh);
-            if (worstCase(fresh) > worstCase(quote) && overConfirmAmount(fresh)) {
+            if (job.auto) {
+                if (worstCase(fresh) > worstCase(quote)) await gateAutoRun(model, fresh, prompt, job.autoHold);
+            } else if (worstCase(fresh) > worstCase(quote) && overConfirmAmount(fresh)) {
                 await confirmSpend(model, fresh);
             }
             quote = fresh;
@@ -566,6 +706,7 @@ async function generate(job) {
             },
         });
         recordSpend(task);
+        noteCharge(usdToNumber(task.cost) ?? 0);
         if (task.state !== 'succeeded') throw new SpicyTaskError(task);
         progress.stopLinkHidden();
         progress.update(`Saving the ${KIND_NOUN[kind]}...`);
@@ -575,9 +716,12 @@ async function generate(job) {
             model,
             quiet: Boolean(job.quiet),
             appendTo: job.appendTo,
+            waitForIdle: Boolean(job.waitForIdle),
             chatIdAtStart,
         });
     } catch (error) {
+        // Submitted but the outcome is unknown (stopped waiting, timed out): count the estimate.
+        if (taskId && !charged) noteCharge(usdToNumber(quote.estimatedCost) ?? worstCase(quote));
         if (error instanceof SpicyApiError && error.kind === 'aborted' && taskId) {
             toastr.info(
                 `Stopped waiting. Task ${taskId} keeps running on SpicyAPI and is billed if it succeeds. Insert it later with /spicy-task ${taskId}`,
@@ -609,7 +753,7 @@ function recordSpend(task) {
  * Downloads every output file of a finished task, saves it in SillyTavern and attaches it to the
  * chat. Returns the local path of the first file.
  */
-async function deliver(task, { prompt, model, quiet, appendTo, chatIdAtStart }) {
+async function deliver(task, { prompt, model, quiet, appendTo, waitForIdle = false, chatIdAtStart }) {
     const api = client();
     const context = ctx();
     const assets = outputAssets(task).filter(asset => asset.url && !asset.unavailable);
@@ -635,6 +779,8 @@ async function deliver(task, { prompt, model, quiet, appendTo, chatIdAtStart }) 
 
     if (quiet) return saved[0].path;
 
+    if (waitForIdle) await untilNotGenerating();
+
     if (chatIdAtStart && ctx().getCurrentChatId?.() !== chatIdAtStart) {
         toastr.warning(`The chat changed while this was generating, so it was not added to a chat. It is saved as ${saved[0].path}.`, 'SpicyAPI', { timeOut: 30000, escapeHtml: true });
         return saved[0].path;
@@ -655,6 +801,22 @@ async function deliver(task, { prompt, model, quiet, appendTo, chatIdAtStart }) 
     }
     toastr.success(`Done. ${task.settled ? 'Charged' : 'Held'} ${formatUsd(task.cost)}.`, 'SpicyAPI', { timeOut: 5000 });
     return saved[0].path;
+}
+
+function isGenerating() {
+    const stop = document.getElementById('mes_stop');
+    return Boolean(stop) && getComputedStyle(stop).display !== 'none';
+}
+
+/**
+ * Waits while SillyTavern is generating a reply, so a new message is not pushed into the chat
+ * under a reply that is still being written. Gives up after ten minutes.
+ */
+async function untilNotGenerating() {
+    const deadline = Date.now() + 10 * 60_000;
+    while (isGenerating() && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
 }
 
 async function postMessage(prompt, attachments, note) {
@@ -732,6 +894,202 @@ async function runFromUi(job) {
     }
 }
 
+// -- Pictures the AI asks for ---------------------------------------------------
+
+const TOOL_DESCRIPTION = [
+    'Shows the user a picture of the current moment in the story, made by an image model from your description.',
+    'Call it when a picture would add to the scene, for example when a new place or character appears, or when the user asks to see something.',
+    'Do not call it on every reply. After it returns, continue the story as usual.',
+].join(' ');
+
+const TOOL_PROMPT_DESCRIPTION = 'A description of the picture for the image model: who is in the frame and how they look (describe them, do not only name them), what they are doing, the setting, the lighting and the camera framing. Concrete visual words, no dialogue, under 90 words.';
+
+// Replies whose tags were removed and that must be drawn again once rendered.
+const rerenderAfterTags = new WeakSet();
+
+function autoEnabled(source) {
+    const s = settings();
+    if (!s.autoPictures) return false;
+    return source === 'tool' ? Boolean(s.autoTool) : Boolean(s.autoTag);
+}
+
+/** This chat's automatic picture state, kept in the chat's metadata. */
+function chatAutoState() {
+    const metadata = ctx().chatMetadata;
+    if (!metadata || typeof metadata !== 'object') return null;
+    if (!metadata[MODULE] || typeof metadata[MODULE] !== 'object') metadata[MODULE] = {};
+    return metadata[MODULE];
+}
+
+/**
+ * Makes a picture the AI asked for. Never throws.
+ * @param {{prompt: string, source: 'tool'|'tag'}} request
+ * @returns {Promise<{shown: boolean, reason?: string}>}
+ */
+async function runAutoPicture({ prompt, source }) {
+    const s = settings();
+    if (!autoEnabled(source)) return { shown: false, reason: 'automatic pictures are turned off' };
+    if (!s.apiKey) {
+        toastr.warning('The AI asked for a picture, but there is no SpicyAPI key in Extensions > SpicyAPI.', 'SpicyAPI');
+        return { shown: false, reason: 'the picture service is not set up' };
+    }
+    const context = ctx();
+    if (!context.getCurrentChatId?.()) return { shown: false, reason: 'no chat is open' };
+
+    // 1. Per-chat cooldown.
+    const state = chatAutoState();
+    const replies = countReplies(context.chat);
+    const every = parseEvery(s.autoEvery);
+    if (state && !cooldownAllows({ replies, lastReplies: state.autoReplies, every })) {
+        console.info(LOG_PREFIX, `Automatic picture skipped: at most one every ${every} replies.`);
+        return { shown: false, reason: `a picture was shown recently (at most one every ${every} replies)` };
+    }
+
+    // 2. Daily cap, before asking for a quote.
+    const cap = parseLimit(s.autoDailyCap);
+    if (cap !== null && autoSpend.spentToday() + autoReserved >= cap - 1e-9) {
+        toastr.info(`Automatic picture skipped: today's limit for automatic pictures (${formatUsd(String(cap))}) is reached.`, 'SpicyAPI', { timeOut: 8000 });
+        return { shown: false, reason: 'today\'s limit for automatic pictures is reached' };
+    }
+
+    // The attempt counts for the cooldown whatever happens next, so a refused or failed picture
+    // is not asked for again on the very next reply.
+    if (state) {
+        state.autoReplies = replies;
+        context.saveMetadataDebounced?.();
+    }
+
+    const autoHold = { amount: 0 };
+    try {
+        const path = await generate({
+            kind: 'image',
+            prompt,
+            auto: true,
+            autoHold,
+            // The tool runs inside SillyTavern's generation and posts at once, as its own
+            // message before the model continues. A tag is read from a finished reply; its
+            // picture waits until no other reply is being written.
+            waitForIdle: source === 'tag',
+            onCharge: amount => {
+                autoSpend.add(amount);
+                renderAutoSpend();
+            },
+        });
+        return path ? { shown: true } : { shown: false, reason: 'it could not be generated' };
+    } catch (error) {
+        if (error instanceof Skipped) {
+            if (error.notify) toastr.info(`Automatic picture skipped: ${error.reason}.`, 'SpicyAPI', { timeOut: 8000, escapeHtml: true });
+            return { shown: false, reason: error.reason };
+        }
+        if (error instanceof Cancelled) return { shown: false, reason: 'the user stopped it' };
+        showError(error);
+        if (error instanceof OverLimit) return { shown: false, reason: 'it costs more than the user allows per picture' };
+        return { shown: false, reason: 'it could not be generated' };
+    } finally {
+        releaseAutoSpend(autoHold);
+    }
+}
+
+function cleanToolPrompt(value) {
+    return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 2000);
+}
+
+async function toolAction(args) {
+    const prompt = cleanToolPrompt(args?.prompt);
+    const outcome = prompt
+        ? await runAutoPicture({ prompt, source: 'tool' })
+        : { shown: false, reason: 'the description was empty' };
+    if (outcome.shown) {
+        return `Done: the picture is now shown to the user in the chat. Continue the story; do not describe the picture again and do not call ${TOOL_NAME} again in this reply.`;
+    }
+    return `No picture was shown because ${outcome.reason}. Continue the story without it and do not call ${TOOL_NAME} again in this reply.`;
+}
+
+/**
+ * Registers the function tool once. SillyTavern asks `shouldRegister` before every chat request,
+ * so switching it on or off takes effect immediately. The tool is offered on every request while it
+ * is on; the cooldown and the daily cap are applied when it is called.
+ */
+function registerPictureTool() {
+    const context = ctx();
+    if (typeof context.registerFunctionTool !== 'function') {
+        console.warn(LOG_PREFIX, 'This SillyTavern version has no function tools; the AI can use the reply tag instead.');
+        return;
+    }
+    context.registerFunctionTool({
+        name: TOOL_NAME,
+        displayName: 'SpicyAPI picture',
+        description: TOOL_DESCRIPTION,
+        parameters: {
+            type: 'object',
+            properties: {
+                prompt: { type: 'string', description: TOOL_PROMPT_DESCRIPTION },
+            },
+            required: ['prompt'],
+        },
+        action: toolAction,
+        formatMessage: () => 'The AI asked SpicyAPI for a picture.',
+        shouldRegister: () => autoEnabled('tool') && Boolean(settings().apiKey),
+    });
+}
+
+/** Whether SillyTavern will offer function tools with the current chat connection. */
+function toolCallingState() {
+    const context = ctx();
+    if (context.mainApi !== 'openai') return 'not-chat-completion';
+    if (!context.chatCompletionSettings?.function_calling) return 'off';
+    try {
+        if (typeof context.isToolCallingSupported === 'function' && !context.isToolCallingSupported()) return 'unsupported';
+    } catch {
+        return 'unsupported';
+    }
+    return 'ready';
+}
+
+/** Puts the tag instruction into the prompt of normal generations when the user wants it. */
+function onGenerationStarted(type) {
+    const s = settings();
+    const wanted = s.autoPictures && s.autoTag && s.autoTagInject && Boolean(s.apiKey) && type !== 'quiet' && type !== 'impersonate';
+    ctx().setExtensionPrompt?.(INSTRUCTION_KEY, wanted ? tagInstruction(s.autoTagName) : '', PROMPT_IN_CHAT, INSTRUCTION_DEPTH, false, PROMPT_ROLE_SYSTEM);
+}
+
+/**
+ * Removes picture tags from a new reply and makes the first one. The tag is taken out of the
+ * stored message (and its swipe), so it neither shows nor goes back to the AI. The picture is
+ * posted as its own message after the reply, like every other result, so it follows the
+ * "Let the AI see generated pictures" setting instead of being sent along with the reply.
+ */
+function onMessageReceived(messageId, type) {
+    if (!autoEnabled('tag') || NO_AUTO_TYPES.has(type)) return;
+    const context = ctx();
+    const message = context.chat?.[messageId];
+    if (!message || message.is_user || message.is_system || message.extra?.spicyapi) return;
+    const tagName = normalizeTagName(settings().autoTagName);
+    const stripped = stripPictureTags(message.mes, tagName);
+    if (!stripped.changed) return;
+    message.mes = stripped.text;
+    if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id) && message.swipe_id < message.swipes.length) {
+        message.swipes[message.swipe_id] = stripped.text;
+    }
+    if (typeof message.extra?.display_text === 'string') {
+        message.extra.display_text = stripPictureTags(message.extra.display_text, tagName).text;
+    }
+    rerenderAfterTags.add(message);
+    // Streamed replies are already on screen; others are drawn right after this event.
+    if ($(`#chat .mes[mesid="${messageId}"]`).length) context.updateMessageBlock?.(messageId, message);
+    if (stripped.prompts.length) {
+        runAutoPicture({ prompt: stripped.prompts[0], source: 'tag' });
+    }
+}
+
+function onMessageRendered(messageId) {
+    const context = ctx();
+    const message = context.chat?.[messageId];
+    if (!message || !rerenderAfterTags.has(message)) return;
+    rerenderAfterTags.delete(message);
+    context.updateMessageBlock?.(messageId, message);
+}
+
 // -- Settings panel ----------------------------------------------------------
 
 async function renderSettings() {
@@ -800,6 +1158,7 @@ async function renderSettings() {
     }
     $('#spicyapi_connect_chat').on('click', connectChat);
 
+    bindAutoSettings();
     renderSessionSpend();
     if (s.apiKey) {
         refreshCatalogUi();
@@ -807,6 +1166,94 @@ async function renderSettings() {
     } else {
         $('#spicyapi_models_status').text('Paste an API key to load the models.');
     }
+}
+
+function bindAutoSettings() {
+    const s = settings();
+    const toggle = (selector, key) => {
+        $(selector).prop('checked', Boolean(s[key])).on('change', function () {
+            settings()[key] = $(this).prop('checked');
+            save();
+            renderAutoSettings();
+        });
+    };
+    toggle('#spicyapi_auto', 'autoPictures');
+    toggle('#spicyapi_auto_tool', 'autoTool');
+    toggle('#spicyapi_auto_tag', 'autoTag');
+    toggle('#spicyapi_tag_inject', 'autoTagInject');
+    $('#spicyapi_tag_name').val(s.autoTagName === DEFAULT_TAG ? '' : s.autoTagName).on('change', function () {
+        settings().autoTagName = normalizeTagName($(this).val());
+        $(this).val(settings().autoTagName === DEFAULT_TAG ? '' : settings().autoTagName);
+        save();
+        renderAutoSettings();
+    });
+    $('#spicyapi_tag_copy').on('click', async () => {
+        const text = tagInstruction(settings().autoTagName);
+        try {
+            await navigator.clipboard.writeText(text);
+            toastr.success('Instruction copied.', 'SpicyAPI', { timeOut: 2000 });
+        } catch {
+            $('#spicyapi_tag_instruction').trigger('focus').trigger('select');
+            toastr.info('Select the text and copy it with Ctrl+C.', 'SpicyAPI');
+        }
+    });
+    $('#spicyapi_auto_every').val(parseEvery(s.autoEvery)).on('change', function () {
+        settings().autoEvery = parseEvery($(this).val());
+        $(this).val(settings().autoEvery);
+        save();
+    });
+    $('#spicyapi_auto_cap').val(s.autoDailyCap ?? '').on('change', function () {
+        settings().autoDailyCap = parseLimit($(this).val());
+        $(this).val(settings().autoDailyCap ?? '');
+        save();
+        renderAutoSpend();
+    });
+    $('#spicyapi_auto_above').val(s.autoAboveConfirm === 'skip' ? 'skip' : 'ask').on('change', function () {
+        settings().autoAboveConfirm = $(this).val() === 'skip' ? 'skip' : 'ask';
+        save();
+    });
+    $('#spicyapi_enable_tools').on('click', () => {
+        const box = $('#openai_function_calling');
+        if (!box.length) {
+            toastr.warning('Open AI Response Configuration and turn on Enable function calling.', 'SpicyAPI');
+            return;
+        }
+        box.prop('checked', true).trigger('input');
+        setTimeout(renderToolStatus, 0);
+    });
+    renderAutoSettings();
+}
+
+function renderAutoSettings() {
+    const s = settings();
+    $('#spicyapi_auto_options').toggle(Boolean(s.autoPictures));
+    $('#spicyapi_tag_name, #spicyapi_tag_inject, #spicyapi_tag_instruction').prop('disabled', !s.autoTag);
+    $('#spicyapi_tag_instruction').val(tagInstruction(s.autoTagName));
+    renderToolStatus();
+    renderAutoSpend();
+}
+
+function renderToolStatus() {
+    const target = $('#spicyapi_tool_status');
+    if (!target.length) return;
+    const s = settings();
+    const state = toolCallingState();
+    const messages = {
+        'not-chat-completion': 'Function tools need a Chat Completion API. With other APIs, use the reply tag below.',
+        off: 'SillyTavern sends function tools only with Enable function calling turned on (AI Response Configuration).',
+        unsupported: 'The connected chat model or prompt post-processing setting does not allow function tools. Use the reply tag below, or change the connection.',
+        ready: 'Ready: the connected chat model can ask for a picture.',
+    };
+    target.text(s.autoTool ? messages[state] : 'Off.');
+    $('#spicyapi_enable_tools').toggle(Boolean(s.autoTool) && state === 'off');
+}
+
+function renderAutoSpend() {
+    const target = $('#spicyapi_auto_spent');
+    if (!target.length) return;
+    const cap = parseLimit(settings().autoDailyCap);
+    const spent = autoSpend.spentToday();
+    target.text(`Automatic pictures today, in this browser: ${formatUsd(spent.toFixed(6))}${cap === null ? '' : ` of ${formatUsd(String(cap))}`}.`);
 }
 
 function fillModelSelect(kind) {
@@ -1297,7 +1744,16 @@ async function init() {
     injectAnimateButtons();
     bindButtons();
     registerCommands();
+    registerPictureTool();
     const context = ctx();
+    const types = context.eventTypes;
+    context.eventSource.on(types.GENERATION_STARTED, onGenerationStarted);
+    context.eventSource.on(types.MESSAGE_RECEIVED, onMessageReceived);
+    context.eventSource.on(types.CHARACTER_MESSAGE_RENDERED, onMessageRendered);
+    for (const type of [types.MAIN_API_CHANGED, types.CHATCOMPLETION_SOURCE_CHANGED, types.CHATCOMPLETION_MODEL_CHANGED, types.SETTINGS_UPDATED, types.ONLINE_STATUS_CHANGED]) {
+        if (type) context.eventSource.on(type, () => setTimeout(renderToolStatus, 0));
+    }
+    $(document).on('input change', '#openai_function_calling, #custom_prompt_post_processing', () => setTimeout(renderToolStatus, 0));
     // Messages rendered before this extension loaded have no Animate button yet.
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, () => setTimeout(injectAnimateButtons, 0));
     context.eventSource.on(context.eventTypes.APP_READY, () => {

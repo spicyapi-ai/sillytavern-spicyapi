@@ -8,8 +8,9 @@ A [SillyTavern](https://github.com/SillyTavern/SillyTavern) extension that makes
 - Every run is priced first and shown in US dollars. You set the amount above which the extension asks before spending, and a hard limit per run.
 - Results are saved into SillyTavern and attached to the chat, hidden from the AI by default.
 - Optional: use the character's avatar as a reference picture, with models that accept one.
+- Optional, off by default: let the AI show a picture when the story calls for it, through a function tool or a tag in its reply, with a per-chat cooldown and a daily limit.
 
-Last verified with SillyTavern 1.19.0 on 2026-10-06.
+Last verified with SillyTavern 1.19.0 on 2026-10-07.
 
 ## Install
 
@@ -82,6 +83,49 @@ Results are downloaded and saved into SillyTavern's image folder (`data/<user>/u
 
 If you switch chats while something is generating, the result is saved but not added to the chat; the extension tells you where it is.
 
+## Let the AI show pictures
+
+Off by default. Turn on **Let the AI show a picture when the story calls for it** under **Extensions > SpicyAPI > Let the AI show pictures**, then choose how the chat model asks for a picture. You can use either way, or both.
+
+### Function tool (chat APIs with tool calling)
+
+The extension registers a function tool named `spicyapi_generate_image`. The chat model decides when a picture fits the scene and calls the tool with a description; the picture is posted as its own message and the model then continues the story. SillyTavern adds a small "Tool calls" note to the chat, as it does for every function tool.
+
+You need:
+
+- a Chat Completion API (API Connections > Chat Completion), with any source that supports tool calling, including **Custom (OpenAI-compatible)** pointed at SpicyAPI;
+- **Enable function calling** turned on in **AI Response Configuration** (the SpicyAPI panel shows whether it is on and has a button to turn it on);
+- a chat model that supports tools. Every SpicyAPI chat model does.
+
+While the tool is on, SillyTavern sends its definition with every chat request, and every call adds one more chat request (the one where the model continues the story). Both cost a few tokens on your chat API.
+
+### Reply tag (any chat API)
+
+Turn on **From a tag in the reply**. The chat model ends a reply with a tag like this:
+
+```
+<pic prompt="description of the picture">
+```
+
+The extension removes the tag from the message, so it is neither shown nor sent back to the AI, and posts the picture as its own message right after that reply (once no other reply is being written). `<pic prompt='...' />` and `<pic>description</pic>` work too. You can change the tag name.
+
+With **Add this instruction to the prompt for me** on (the default), the extension adds this instruction to every normal generation, but not to quiet or impersonated ones:
+
+> You can show the user a picture of the current moment in the story. When a picture would add to the scene, for example when a new place or character appears or the user asks to see something, end your reply with one tag in this form: `<pic prompt="description of the picture">`. In the description, say who is in the frame and how they look (describe them, do not only name them), what they are doing, the setting, the lighting and the camera framing, in under 60 words. Use at most one tag per reply, do not add one to every reply, and do not mention the tag in the story.
+
+To use your own wording instead, turn that box off and put an instruction in your system prompt, character card or Author's Note. **Copy the instruction** puts the text above on the clipboard.
+
+Only the first tag of a reply makes a picture. Greetings, messages added by commands and impersonated messages are left alone.
+
+### Limits for automatic pictures
+
+- **At most one picture every N replies** (default 3), counted per chat and stored with the chat. A picture the AI asks for during the cooldown is skipped, and the model is told to carry on without it. A picture that was declined, skipped or failed also starts the cooldown, so the same request does not come back on the very next reply.
+- **Daily limit for automatic pictures** (default $0.50): what automatic pictures cost today, by your local date. The total is kept in this browser's local storage, so each browser and device keeps its own count. Leave it empty for no daily limit; 0 turns automatic pictures off.
+- **Above the confirmation amount**: **Ask me first** (the default) shows the description the AI wrote and the price before anything is charged; **Skip the picture** skips it with a short notice.
+- **Never spend more than** (per run) applies as for every other run.
+- Automatic runs always use your picture model and never make videos. The prompt editor does not open for them; the description comes from the chat model.
+- Like every other result, automatic pictures are hidden from the AI unless **Let the AI see generated pictures and videos** is on. Keep it off with chat models that only read text: SillyTavern sends visible pictures along with the chat, and such models reject them.
+
 ## Chat with SpicyAPI models
 
 **Connect chat** in the panel does the setup for you: it selects **Chat Completion > Custom (OpenAI-compatible)** in API Connections, sets the endpoint to `https://api.spicyapi.ai/v1`, saves your key as that endpoint's API key and selects the chat model you picked.
@@ -113,7 +157,8 @@ Tips:
 ## Privacy
 
 - **Your API key** is stored in SillyTavern's settings file on the machine that runs SillyTavern (`data/<user>/settings.json`, under `extension_settings.spicyapi`), in plain text. Other SillyTavern extensions can read it. If you use **Connect chat**, the key is also saved in SillyTavern's secrets file as the Custom endpoint key.
-- **What leaves your machine**: the prompt, the model settings and any reference picture (the character avatar, or the picture you animate) go to `api.spicyapi.ai`, through SillyTavern's proxy if you chose that route. When the chat model writes the prompt, the chat context goes to whichever chat API SillyTavern is connected to, as with any other message.
+- **What leaves your machine**: the prompt, the model settings and any reference picture (the character avatar, or the picture you animate) go to `api.spicyapi.ai`, through SillyTavern's proxy if you chose that route. When the chat model writes the prompt, the chat context goes to whichever chat API SillyTavern is connected to, as with any other message. With automatic pictures on, the description the chat model wrote is the prompt.
+- **The daily total for automatic pictures** is kept in this browser's local storage; the cooldown is stored in the chat's metadata.
 - **Results** are stored in SillyTavern's own image folder on your machine. SpicyAPI keeps generated files for a limited time; see the privacy policy on [spicyapi.ai](https://spicyapi.ai).
 - The extension sends no analytics and talks to nothing but SpicyAPI and your own SillyTavern server.
 
@@ -123,12 +168,14 @@ Tips:
 - **"SillyTavern's CORS proxy is turned off"**: set `enableCorsProxy: true` in `config.yaml` and restart SillyTavern, or switch back to **Direct**.
 - **"The result ... is ready, but it could not be downloaded"**: run `/spicy-task <task id>` to try again. If it keeps failing, use the **Auto** route with the CORS proxy enabled.
 - **The prompt could not be written**: no chat model is connected, or it returned an error. Type a prompt instead.
+- **The AI never shows a picture**: check that **Let the AI show pictures** is on and that the panel says the function tool is ready. Without tool calling, turn on the reply tag. The cooldown and the daily limit also stop automatic pictures; the panel shows today's total.
+- **Every chat request fails after turning on the function tool**: the chat API or model rejects tools. Turn the function tool off and use the reply tag.
 
 More about the API: [docs.spicyapi.ai](https://docs.spicyapi.ai).
 
 ## Development
 
-The extension is plain JavaScript modules with no build step and no dependencies. The tests cover the API client and the catalogue logic and run under Node 20 or later:
+The extension is plain JavaScript modules with no build step and no dependencies. The tests cover the API client, the catalogue logic and the rules for automatic pictures (tag parser, cooldown and daily limit), and run under Node 20 or later:
 
 ```
 npm test
