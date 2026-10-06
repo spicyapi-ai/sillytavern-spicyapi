@@ -311,7 +311,7 @@ async function writePrompt(kind) {
     }
     const prompt = cleanWrittenPrompt(text);
     if (!prompt) {
-        throw new Error('The chat model returned an empty prompt. Raise its response length, or type a prompt.');
+        throw new Error('The chat API returned no prompt. Check that a chat model is connected and selected in API Connections (and that its response length is not too low), or type a prompt.');
     }
     return prompt;
 }
